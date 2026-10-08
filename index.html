@@ -15,7 +15,7 @@
     <!-- Your existing styles -->
     <link rel="stylesheet" href="assets/css/styles.css">
 
-    <!-- Font Awesome fallback -->
+    <!-- Local icons: available without a CDN connection. -->
     <link rel="stylesheet" href="assets/fontawesome/css/all.min.css">
 
     <style>
@@ -1165,6 +1165,27 @@
             .files-modal-overlay { padding:8px; }
         }
     </style>
+<style>
+details.map-filters {min-width:0;max-width:calc(100vw - 40px);padding:0}
+details.map-filters summary {padding:12px 16px;cursor:pointer;font-size:13px;font-weight:600;min-height:44px;box-sizing:border-box;user-select:none}
+.public-filter-options {padding:0 16px 14px;max-height:45dvh;overflow:auto}
+#photo-modal .files-modal-header {flex-shrink:0}
+#photo-title {overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:15px}
+.public-photo-tools {display:flex;align-items:center;justify-content:center;gap:6px;flex-shrink:0;padding:6px;border-bottom:1px solid var(--border-color);flex-wrap:wrap}
+.public-photo-tools button {width:44px;height:44px;border:0;border-radius:8px;background:var(--bg-tertiary);color:var(--text-primary);font-size:20px;cursor:pointer;touch-action:manipulation}
+.public-photo-tools button:disabled {opacity:.35;cursor:default}
+.public-photo-tools button:focus-visible {outline:2px solid var(--accent-primary)}
+#public-photo-count {min-width:64px;text-align:center;font-size:13px}
+#photo-content {position:relative;overflow:hidden;touch-action:none;user-select:none;overscroll-behavior:contain;cursor:grab;border:0;border-radius:0}
+#photo-content:active {cursor:grabbing}
+#photo-content img {position:absolute;inset:0;width:100%;height:100%;max-width:none;max-height:none;object-fit:contain;transform-origin:center;pointer-events:none;user-select:none;-webkit-user-drag:none;will-change:transform}
+.public-photo-message {position:absolute;inset:0;display:grid;place-content:center;text-align:center;padding:20px;color:var(--text-secondary);pointer-events:none}
+.public-photo-message[hidden] {display:none}
+.public-photo-help {font-size:11px;color:var(--text-secondary);text-align:center;padding:4px 8px;flex-shrink:0}
+@media(max-height:400px) {.public-photo-help {display:none}.public-photo-tools {padding:2px}.public-photo-tools button {height:36px;width:40px}#photo-modal .files-modal-header {padding:2px 10px;min-height:48px}}
+@media(prefers-reduced-motion:reduce) {#photo-modal .files-modal-content {animation:none}}
+
+</style>
 </head>
 <body>
     <!-- Loading -->
@@ -1967,7 +1988,7 @@
             if (!text) return '';
             const div = document.createElement('div');
             div.textContent = text;
-            return div.innerHTML;
+            return div.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
         }
 
         document.getElementById('photo-modal').addEventListener('click', (e) => { if (e.target.id === 'photo-modal') closeModal(); });
@@ -1979,5 +2000,155 @@
             loadObjects();
         });
     </script>
+<script>
+// Embedded in index.html so data-only updates do not need new external files.
+(() => {
+    const modal = document.getElementById('photo-modal');
+    const stage = document.getElementById('photo-content');
+    const panel = document.querySelector('.map-filters');
+    if (panel) {
+        const details = document.createElement('details');details.className = 'map-filters';
+        const summary = document.createElement('summary');summary.id = 'public-filter-toggle';
+        const options = document.createElement('div');options.className = 'public-filter-options';
+        panel.querySelector('.map-filters-title')?.remove();
+        while (panel.firstChild) options.append(panel.firstChild);
+        details.append(summary,options);panel.replaceWith(details);
+        const count = () => {
+            const all = options.querySelectorAll('input[type=checkbox]');
+            const selected = [...all].filter(el=>el.checked).length;
+            summary.textContent = 'Фильтры меток'+(selected === all.length ? '' : ` (${selected}/${all.length})`);
+        };
+        options.addEventListener('change',count);count();
+        document.addEventListener('click',event=>{if(!details.contains(event.target))details.open=false;});
+    }
+
+    const tools = document.createElement('div');tools.className = 'public-photo-tools';
+    tools.innerHTML = '<button id="public-photo-prev" aria-label="Предыдущее фото" title="Предыдущее фото">←</button><span id="public-photo-count" aria-live="polite"></span><button id="public-photo-next" aria-label="Следующее фото" title="Следующее фото">→</button><button id="public-photo-minus" aria-label="Уменьшить фото" title="Уменьшить">−</button><button id="public-photo-plus" aria-label="Увеличить фото" title="Увеличить">+</button><button id="public-photo-reset" aria-label="Сбросить увеличение" title="Исходный размер">↺</button>';
+    stage.before(tools);
+    const help = document.createElement('div');help.className = 'public-photo-help';
+    help.textContent = 'Свайп — другое фото · Два пальца или двойное касание — увеличение';stage.after(help);
+    modal.setAttribute('role','dialog');modal.setAttribute('aria-modal','true');modal.setAttribute('aria-labelledby','photo-title');
+    const $ = id => document.getElementById(id);
+    let gallery=[], index=0, image=null, zoom=1, panX=0, panY=0, drag=null, pinch=null;
+    let hadPinch=false, lastTap=0, lastFocus=null, sequence=0, lastPointerType='';
+    const pointers=new Map();
+    function draw() {
+        if(!image)return;
+        const fit=image.naturalWidth ? Math.min(stage.clientWidth/image.naturalWidth,stage.clientHeight/image.naturalHeight) : 1;
+        const maxX=Math.max(0,(image.naturalWidth*fit*zoom-stage.clientWidth)/2);
+        const maxY=Math.max(0,(image.naturalHeight*fit*zoom-stage.clientHeight)/2);
+        panX=Math.max(-maxX,Math.min(maxX,panX));panY=Math.max(-maxY,Math.min(maxY,panY));
+        image.style.transform=`translate(${panX}px,${panY}px) scale(${zoom})`;
+        stage.dataset.zoom=String(zoom);stage.dataset.photoIndex=String(index);
+        $('public-photo-minus').disabled=zoom<=1;$('public-photo-plus').disabled=zoom>=6;
+    }
+    function setZoom(value) {zoom=Math.max(1,Math.min(6,value));if(zoom===1){panX=0;panY=0;}draw();}
+    function reset() {pointers.clear();drag=null;pinch=null;hadPinch=false;lastTap=0;zoom=1;panX=0;panY=0;draw();}
+    function show() {
+        const item=gallery[index];if(!item)return;
+        const token=++sequence;image=document.createElement('img');image.alt=item.name||'Фото объекта';image.draggable=false;
+        const message=document.createElement('div');message.className='public-photo-message';message.textContent='Загрузка фотографии…';
+        stage.replaceChildren(image,message);$('photo-title').textContent=image.alt;
+        $('public-photo-count').textContent=`${index+1} / ${gallery.length}`;
+        $('public-photo-prev').disabled=gallery.length<2;$('public-photo-next').disabled=gallery.length<2;
+        reset();
+        image.onload=()=>{if(token===sequence){message.hidden=true;draw();}};
+        image.onerror=()=>{if(token===sequence){message.textContent='Не удалось загрузить фото. Попробуйте соседний снимок или откройте карту позже.';}};
+        image.src=item.web_path;
+    }
+    function move(delta) {if(gallery.length>1){index=(index+delta+gallery.length)%gallery.length;show();}}
+    function openGallery(items,position) {
+        if(!items.length)return;
+        lastFocus=document.activeElement;gallery=items;index=Math.max(0,Math.min(items.length-1,position));
+        updatePublicViewport();modal.classList.add('active');show();
+        modal.querySelector('.files-modal-close').focus();
+    }
+    openPhoto=function(path,name) {
+        for(const details of Object.values(PUBLIC_PHOTOS)) {
+            const photos=details.photos||[],found=photos.findIndex(photo=>photo.web_path===path);
+            if(found>=0){openGallery(photos,found);return;}
+        }
+        openGallery([{web_path:path,name:name||'Фото объекта'}],0);
+    };
+    closeModal=function() {
+        sequence++;modal.classList.remove('active');stage.replaceChildren();image=null;reset();gallery=[];
+        if(lastFocus?.isConnected)lastFocus.focus();lastFocus=null;
+    };
+    // Safe actions preserve quoted filenames and the selected object's gallery,
+    // including identical photos shared by different objects.
+    const originalPopup=createPopupContent;
+    createPopupContent=function(obj,details=null) {
+        const node=document.createElement('div');node.innerHTML=originalPopup(obj,details);
+        node.querySelectorAll('.photo-thumb').forEach((thumb,i)=>{
+            thumb.removeAttribute('onclick');thumb.dataset.galleryId=String(obj.id);thumb.dataset.galleryIndex=String(i);
+            thumb.setAttribute('role','button');thumb.tabIndex=0;thumb.setAttribute('aria-label','Открыть фото '+(i+1));
+        });
+        return node.innerHTML;
+    };
+    function thumbAction(event) {
+        const thumb=event.target.closest('[data-gallery-id]');if(!thumb)return;
+        event.preventDefault();event.stopPropagation();
+        openGallery(PUBLIC_PHOTOS[thumb.dataset.galleryId]?.photos||[],Number(thumb.dataset.galleryIndex));
+    }
+    document.addEventListener('click',thumbAction);
+    document.addEventListener('keydown',event=>{
+        if((event.key==='Enter'||event.key===' ')&&event.target.matches('[data-gallery-id]'))thumbAction(event);
+        if(!modal.classList.contains('active'))return;
+        if(event.key==='ArrowLeft'){event.preventDefault();move(-1);}
+        if(event.key==='ArrowRight'){event.preventDefault();move(1);}
+        if(event.key==='+'||event.key==='='){event.preventDefault();setZoom(zoom*1.5);}
+        if(event.key==='-'){event.preventDefault();setZoom(zoom/1.5);}
+        if(event.key==='Tab'){
+            const buttons=[...modal.querySelectorAll('button:not(:disabled)')],first=buttons[0],last=buttons.at(-1);
+            if(event.shiftKey&&document.activeElement===first){event.preventDefault();last.focus();}
+            else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first.focus();}
+        }
+    });
+    $('public-photo-prev').onclick=()=>move(-1);$('public-photo-next').onclick=()=>move(1);
+    $('public-photo-minus').onclick=()=>setZoom(zoom/1.5);$('public-photo-plus').onclick=()=>setZoom(zoom*1.5);
+    $('public-photo-reset').onclick=()=>{zoom=1;panX=0;panY=0;draw();};
+    function startGesture() {
+        const values=[...pointers.values()];
+        if(values.length>=2){
+            hadPinch=true;const [a,b]=values;
+            pinch={distance:Math.hypot(a.x-b.x,a.y-b.y)||1,zoom,x:(a.x+b.x)/2,y:(a.y+b.y)/2,panX,panY};drag=null;
+        } else if(values.length===1){drag={...values[0],panX,panY,time:performance.now()};pinch=null;}
+    }
+    stage.addEventListener('pointerdown',event=>{
+        if(event.pointerType==='mouse'&&event.button!==0)return;
+        lastPointerType=event.pointerType;
+        event.preventDefault();if(!pointers.size)hadPinch=false;
+        pointers.set(event.pointerId,{x:event.clientX,y:event.clientY});stage.setPointerCapture(event.pointerId);startGesture();
+    });
+    stage.addEventListener('pointermove',event=>{
+        if(!pointers.has(event.pointerId))return;event.preventDefault();
+        pointers.set(event.pointerId,{x:event.clientX,y:event.clientY});
+        const values=[...pointers.values()];
+        if(pinch&&values.length>=2){
+            const [a,b]=values,box=stage.getBoundingClientRect();
+            zoom=Math.max(1,Math.min(6,pinch.zoom*Math.hypot(a.x-b.x,a.y-b.y)/pinch.distance));
+            const ratio=zoom/pinch.zoom;
+            panX=(a.x+b.x)/2-box.left-box.width/2-(pinch.x-box.left-box.width/2-pinch.panX)*ratio;
+            panY=(a.y+b.y)/2-box.top-box.height/2-(pinch.y-box.top-box.height/2-pinch.panY)*ratio;draw();
+        } else if(drag&&zoom>1){panX=drag.panX+event.clientX-drag.x;panY=drag.panY+event.clientY-drag.y;draw();}
+    });
+    function finish(event) {
+        if(!pointers.has(event.pointerId))return;
+        const single=pointers.size===1,dx=drag?event.clientX-drag.x:0,dy=drag?event.clientY-drag.y:0;
+        pointers.delete(event.pointerId);
+        if(event.type==='pointerup'&&single&&!hadPinch&&drag){
+            if(zoom===1&&Math.abs(dx)>50&&Math.abs(dx)>Math.abs(dy)*1.4&&performance.now()-drag.time<800){move(dx<0?1:-1);}
+            else if(event.pointerType==='touch'&&Math.hypot(dx,dy)<12){const now=performance.now();if(now-lastTap<300){setZoom(zoom>1?1:2.5);lastTap=0;}else lastTap=now;}
+        }
+        if(!pointers.size){drag=null;pinch=null;}else startGesture();
+    }
+    stage.addEventListener('pointerup',finish);stage.addEventListener('pointercancel',finish);
+    stage.addEventListener('lostpointercapture',event=>{pointers.delete(event.pointerId);if(!pointers.size){drag=null;pinch=null;}});
+    stage.addEventListener('dblclick',event=>{event.preventDefault();if(lastPointerType!=='touch')setZoom(zoom>1?1:2.5);});
+    stage.addEventListener('wheel',event=>{event.preventDefault();setZoom(zoom*(event.deltaY<0?1.15:1/1.15));},{passive:false});
+    window.addEventListener('resize',()=>{if(image)draw();});
+})();
+
+</script>
 </body>
 </html>
